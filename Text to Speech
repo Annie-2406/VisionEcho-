@@ -1,0 +1,67 @@
+import cv2
+import os
+import json
+import websocket
+from PIL import Image
+from gtts import gTTS
+import google.generativeai as genai
+
+# Configure Gemini API Key
+GEMINI_API_KEY = "AIzaSyA0BB_izdNpPBY1qyaTK5oX8TFl18f85a8"
+genai.configure(api_key=GEMINI_API_KEY)
+
+# ✅ Capture image from webcam
+def capture_image(filename="captured_image.jpg"):
+    cap = cv2.VideoCapture(0)
+    ret, frame = cap.read()
+    if ret:
+        cv2.imwrite(filename, frame)
+        print(f"✅ Image captured and saved as '{filename}'")
+    cap.release()
+    return filename
+
+# ✅ Load image properly
+def load_image(image_path):
+    return Image.open(image_path)  # Convert image to PIL format
+
+def extract_text_from_image(image_path):
+    model = genai.GenerativeModel("gemini-1.5-flash")  # Updated model name
+    image = load_image(image_path)  # Load image correctly
+    
+    response = model.generate_content(["Extract the text from this image:", image])
+    
+    # Process response
+    if response.text:
+        return response.text.strip()
+    else:
+        return "No text detected"
+
+
+# ✅ Convert text to speech
+def text_to_speech(text, filename="output.mp3"):
+    tts = gTTS(text=text, lang="en")
+    tts.save(filename)
+    os.system(f"start {filename}")  # Play audio on Windows
+
+# ✅ Send extracted text via WebSocket
+def send_text_via_websocket(text):
+    WEBSOCKET_SERVER = "ws://localhost:8765"
+    try:
+        ws = websocket.create_connection(WEBSOCKET_SERVER)
+        ws.send(json.dumps({"text": text}))
+        response = ws.recv()
+        print(f"✅ WebSocket Response: {response}")
+        ws.close()
+    except Exception as e:
+        print(f"❌ WebSocket Error: {e}")
+
+# ✅ Main execution
+if __name__ == "__main__":
+    image_path = capture_image()
+    extracted_text = extract_text_from_image(image_path)
+
+    print("📌 Extracted Text:", extracted_text)
+
+    if extracted_text:
+        text_to_speech(extracted_text)
+        send_text_via_websocket(extracted_text)
