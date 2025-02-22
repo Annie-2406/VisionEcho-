@@ -1,0 +1,96 @@
+import cv2
+import cv2
+import torch
+import pytesseract
+import google.generativeai as genai
+from gtts import gTTS
+import os
+from ultralytics import YOLO  # ✅ Correct way to import YOLOv8
+
+# ===========================
+# 1. CONFIGURATIONS
+# ===========================
+
+# Set up Tesseract-OCR path
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+# Set up Gemini AI
+genai.configure(api_key="AIzaSyA0BB_izdNpPBY1qyaTK5oX8TFl18f85a8")  # Replace with your actual API key
+
+# Load YOLOv8 model (✅ Correct way)
+model = YOLO("yolov8m.pt")  # ✅ Use YOLOv8 correctly
+
+# Open webcam
+cap = cv2.VideoCapture(0)
+
+
+
+def speak(text):
+    """ Convert text to speech and play audio """
+    output_folder = r"C:\temp"  # Define folder path
+    output_path = os.path.join(output_folder, "output.mp3")  # Full file path
+
+    # 🔹 Check if the folder exists, if not, create it
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    tts = gTTS(text=text, lang='en')  # Convert text to speech
+    tts.save(output_path)  # Save the audio file
+    os.system(f'start {output_path}')  # Play the audio
+
+# Example usage
+speak("Hello, a person is detected")
+
+
+def ask_gemini(prompt):
+    """ Generate a response from Gemini AI """
+    model = genai.GenerativeModel("gemini-pro")
+    response = model.generate_content(prompt)
+    return response.text
+
+# ===========================
+# 2. MAIN LOOP
+# ===========================
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to capture image")
+        break
+
+    # Run YOLOv8 for object detection
+    results = model(frame)
+
+    detected_objects = []
+    for r in results:
+        for box in r.boxes:  # Loop through detected objects
+            x1, y1, x2, y2 = map(int, box.xyxy[0])  # Bounding box
+            label = model.names[int(box.cls)]  # Object label
+            detected_objects.append(label)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+    # OCR (Text Recognition)
+    extracted_text = pytesseract.image_to_string(frame)
+
+    # Create a meaningful description
+    description = "Detected objects: " + ", ".join(detected_objects)
+    if extracted_text.strip():
+        description += ". Text found: " + extracted_text.strip()
+
+    # Process through Gemini AI
+    ai_response = ask_gemini(description)
+
+    # Display results
+    cv2.imshow("Smart Glasses", frame)
+
+    # Convert AI response to speech
+    speak(ai_response)
+
+    # Press 'q' to quit
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Cleanup
+cap.release()
+cv2.destroyAllWindows()
