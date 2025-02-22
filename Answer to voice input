@@ -1,0 +1,179 @@
+import cv2
+import numpy as np
+import pytesseract
+import google.generativeai as genai
+from gtts import gTTS
+import pygame
+import speech_recognition as sr
+from ultralytics import YOLO
+from PIL import Image
+import datetime
+import os
+
+# -------------- CONFIGURATIONS -------------------
+ESP32_URL = "http://192.168.251.218:81/stream"  # Replace with your ESP32-CAM IP
+YOLO_MODEL_PATH = "yolov8m.pt"  # Ensure you have YOLOv8 model
+genai.configure(api_key="AIzaSyA0BB_izdNpPBY1qyaTK5oX8TFl18f85a8")  # Set your Gemini API Key
+
+# Windows users: Set Tesseract OCR path (Change if installed elsewhere)
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+# Initialize YOLOv8 Model
+model = YOLO(YOLO_MODEL_PATH)
+
+# ---------------- SPEECH RECOGNITION ------------------
+def listen_for_question():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("🎤 Listening... Speak your question.")
+        recognizer.adjust_for_ambient_noise(source)
+        try:
+            audio = recognizer.listen(source, timeout=5)
+            question = recognizer.recognize_google(audio).lower()
+            print(f"👤 User said: {question}")
+            return question
+        except sr.UnknownValueError:
+            print("[!] Could not understand the speech.")
+            return None
+        except sr.WaitTimeoutError:
+            print("[!] No speech detected.")
+            return None
+
+# ---------------- CAPTURE IMAGE ------------------
+def capture_image():
+    cap = cv2.VideoCapture(ESP32_URL)
+    ret, frame = cap.read()
+    cap.release()
+
+    if ret:
+        cv2.imwrite("captured.jpg", frame)
+        return "captured.jpg"
+    else:
+        print("[✖] Failed to Capture Image")
+        return None
+
+# ---------------- OBJECT DETECTION ------------------
+def detect_objects(image_path):
+    img = Image.open(image_path)
+    results = model(img)
+
+    detected_objects = []
+    for result in results:
+        for box in result.boxes:
+            label = model.names[int(box.cls)]
+            detected_objects.append(label)
+
+    return detected_objects
+
+# ---------------- COLOR DETECTION ------------------
+def detect_color(image_path):
+    image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    avg_color = np.mean(image, axis=(0, 1))  # Get average color
+    r, g, b = int(avg_color[0]), int(avg_color[1]), int(avg_color[2])
+
+    # Basic color matching
+    if r > 200 and g < 100 and b < 100:
+        return "red"
+    elif g > 200 and r < 100 and b < 100:
+        return "green"
+    elif b > 200 and r < 100 and g < 100:
+        return "blue"
+    elif r > 200 and g > 200 and b < 100:
+        return "yellow"
+    elif r > 200 and g > 100 and b > 100:
+        return "orange"
+    elif r > 150 and g > 150 and b > 150:
+        return "white"
+    elif r < 50 and g < 50 and b < 50:
+        return "black"
+    else:
+        return "a mix of colors"
+
+# ---------------- TEXT RECOGNITION ------------------
+def extract_text(image_path):
+    img = Image.open(image_path)
+    text = pytesseract.image_to_string(img)
+
+    if text.strip():
+        return text.strip()
+
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    prompt = "Extract any readable text from this image."
+    response = model.generate_content([prompt, img])
+    
+    return response.text if response.text else "No readable text detected"
+
+# ---------------- TEXT-TO-SPEECH ------------------
+def speak(text):
+    if not text.strip():
+        return
+    
+    if os.path.exists("speech.mp3"):
+        os.remove("speech.mp3")  # Ensure old file is deleted
+
+    tts = gTTS(text, lang="en")
+    tts.save("speech.mp3")
+
+    pygame.mixer.init()
+    pygame.mixer.music.load("speech.mp3")
+    pygame.mixer.music.play()
+
+    while pygame.mixer.music.get_busy():
+        continue  # Wait for speech to finish
+
+# ---------------- AI DECISION MAKING ------------------
+def analyze_question(question):
+    """Use AI to determine the best response based on the question."""
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    prompt = f"Based on the question: '{question}', decide what should be done. Options: [Detect Objects, Read Text, Tell Time, Tell Date, Detect Color, General Answer]. Provide only one option."
+    
+    response = model.generate_content(prompt)
+    decision = response.text.strip().lower()
+    
+    return decision
+
+# ---------------- MAIN FUNCTION ------------------
+def main():
+    # Listen for user question
+    question = listen_for_question()
+    if question is None:
+        return  # No valid speech detected
+
+    # Use AI to analyze what needs to be done
+    task = analyze_question(question)
+
+    if "time" in task:
+        current_time = datetime.datetime.now().strftime("%I:%M %p")
+        speech_output = f"The time is {current_time}."
+    elif "date" in task:
+        current_date = datetime.datetime.now().strftime("%B %d, %Y")
+        speech_output = f"Today's date is {current_date}."
+    elif "detect color" in task:
+        image_path = capture_image()
+        if not image_path:
+            return
+        color = detect_color(image_path)
+        speech_output = f"The prominent color in front of you is {color}."
+    elif "detect objects" in task:
+        image_path = capture_image()
+        if not image_path:
+            return
+        objects = detect_objects(image_path)
+        speech_output = f"I see {', '.join(objects)}." if objects else "I couldn't detect any objects."
+    elif "read text" in task:
+        image_path = capture_image()
+        if not image_path:
+            return
+        text = extract_text(image_path)
+        speech_output = f"I can read: {text}." if text else "I couldn't read any text."
+    else:
+        speech_output = "I'm not sure, but I can try to help."
+
+    print(f"[🔊] Speaking: {speech_output}")
+    speak(speech_output)
+
+if __name__ == "__main__":
+    while True:
+        main()
